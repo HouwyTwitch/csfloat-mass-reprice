@@ -82,7 +82,7 @@ class StallWorker(QThread):
             r = requests.get(
                 f"{BASE_URL}/users/{self.steam_id}/stall",
                 headers={"Authorization": self.api_key},
-                params={"limit": 5000, "sort_by": "highest_price"},
+                params={"limit": 1000, "sort_by": "highest_price"},
                 timeout=30,
             )
             r.raise_for_status()
@@ -427,6 +427,7 @@ class MainWindow(QMainWindow):
         self.api_edit.setEchoMode(QLineEdit.EchoMode.Password)
         self.api_edit.setPlaceholderText("CSFloat API key")
         self.api_edit.setFixedSize(230, 34)
+        self.api_edit.editingFinished.connect(self._save)
         lay.addWidget(self.api_edit)
 
         # Steam ID
@@ -434,6 +435,7 @@ class MainWindow(QMainWindow):
         self.steam_edit = QLineEdit()
         self.steam_edit.setPlaceholderText("76561198…")
         self.steam_edit.setFixedSize(160, 34)
+        self.steam_edit.editingFinished.connect(self._save)
         lay.addWidget(self.steam_edit)
 
         # Load button
@@ -709,6 +711,12 @@ QWidget {{
     background: {C_BG};
     color: {C_TEXT};
     font-size: 13px;
+}}
+QLabel {{
+    background: transparent;
+}}
+QCheckBox {{
+    background: transparent;
 }}
 QScrollArea,
 QScrollArea > QWidget > QWidget {{
