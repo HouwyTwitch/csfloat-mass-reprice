@@ -184,9 +184,20 @@ class ItemRow(QFrame):
 
     # ── layout ────────────────────────────────────────────────────────────────
 
+    # type -> (badge_label, fg, bg)
+    _TYPE_BADGE: dict[str, tuple[str, str, str]] = {
+        "charm": ("Charm",  C_GOLD,   "#2c1d00"),
+        "agent": ("Agent",  "#7289da", "#16193a"),
+        "patch": ("Patch",  "#a0a0a0", "#1e1e1e"),
+        "glove": ("Gloves", "#3ba55c", "#0a2015"),
+        "knife": ("Knife",  "#eb4b4b", "#2a0808"),
+    }
+
     def _build(self) -> None:
         self.setStyleSheet(self._BASE)
-        self.setFixedHeight(80)
+        stickers  = self.item.get("stickers")  or []
+        keychains = self.item.get("keychains") or []
+        self.setFixedHeight(96 if (stickers or keychains) else 76)
 
         root = QHBoxLayout(self)
         root.setContentsMargins(10, 8, 14, 8)
@@ -213,64 +224,76 @@ class ItemRow(QFrame):
         info.setSpacing(3)
         info.setContentsMargins(0, 0, 0, 0)
 
-        # Name row
+        # Name + badge row
         name_row = QHBoxLayout()
         name_row.setSpacing(6)
         name_row.setContentsMargins(0, 0, 0, 0)
 
-        name_txt = self.item.get("market_hash_name", "Unknown Item")
-        rarity   = self.item.get("rarity", 0)
-        col      = RARITY_COLOR.get(rarity, C_TEXT)
+        name_txt   = self.item.get("market_hash_name", "Unknown Item")
+        rarity     = self.item.get("rarity", 0)
+        item_type  = self.item.get("type", "skin")
+        col        = RARITY_COLOR.get(rarity, C_TEXT)
 
         name_lbl = QLabel(name_txt)
         name_lbl.setStyleSheet(f"color:{col};font-weight:700;font-size:13px;")
         name_row.addWidget(name_lbl)
 
+        # Type badge for non-skin items
+        if item_type in self._TYPE_BADGE:
+            txt, fg, bg = self._TYPE_BADGE[item_type]
+            name_row.addWidget(self._badge(txt, fg, bg))
+
+        # Skin-specific badges
         if self.item.get("is_stattrak"):
-            tag = self._badge("StatTrak™", "#cf6a32", "#2e1c0c")
-            name_row.addWidget(tag)
+            name_row.addWidget(self._badge("StatTrak™", "#cf6a32", "#2e1c0c"))
         if self.item.get("is_souvenir"):
-            tag = self._badge("Souvenir", C_GOLD, "#2a1e00")
-            name_row.addWidget(tag)
+            name_row.addWidget(self._badge("Souvenir", C_GOLD, "#2a1e00"))
 
         # Low rank badge
         lr = self.item.get("low_rank")
         if lr and lr <= 100:
-            tag = self._badge(f"#{lr}", "#44cfb2", "#0a2520")
-            name_row.addWidget(tag)
+            name_row.addWidget(self._badge(f"#{lr}", "#44cfb2", "#0a2520"))
 
         name_row.addStretch()
         info.addLayout(name_row)
 
-        # Float · Pattern · Wear
+        # Secondary tags: float · pattern · wear (type-aware)
         tags: list[str] = []
         fv = self.item.get("float_value")
         if fv is not None:
             tags.append(f"Float {fv:.6f}")
-        ps = self.item.get("paint_seed")
-        if ps is not None:
-            tags.append(f"Pattern {ps}")
+
+        # paint_seed for skins, keychain_pattern for charms
+        pattern = self.item.get("paint_seed")
+        if pattern is None:
+            pattern = self.item.get("keychain_pattern")
+        if pattern is not None:
+            tags.append(f"Pattern {pattern}")
+
         wear = self.item.get("wear_name")
         if wear:
             tags.append(wear)
+
         if tags:
             t = QLabel("  ·  ".join(tags))
             t.setStyleSheet(f"color:{C_MUTED};font-size:11px;")
             info.addWidget(t)
 
-        # Stickers & keychains
-        stickers  = self.item.get("stickers")  or []
-        keychains = self.item.get("keychains") or []
-        extras: list[str] = []
-        if stickers:
-            extras.append("Stickers: " + ", ".join(s.get("name", "?") for s in stickers))
-        if keychains:
-            extras.append("Keychain: " + ", ".join(k.get("name", "?") for k in keychains))
-        if extras:
-            e = QLabel("  ·  ".join(extras))
-            e.setStyleSheet(f"color:{C_GOLD};font-size:11px;")
-            e.setWordWrap(False)
-            info.addWidget(e)
+        # Stickers / patches / keychains as thumbnail images
+        if stickers or keychains:
+            img_row = QHBoxLayout()
+            img_row.setSpacing(3)
+            img_row.setContentsMargins(0, 2, 0, 0)
+            for s in stickers:
+                img_row.addWidget(
+                    self._sticker_img(s.get("icon_url", ""), s.get("name", ""))
+                )
+            for k in keychains:
+                img_row.addWidget(
+                    self._sticker_img(k.get("icon_url", ""), k.get("name", ""))
+                )
+            img_row.addStretch()
+            info.addLayout(img_row)
 
         root.addLayout(info, stretch=1)
 
@@ -280,7 +303,7 @@ class ItemRow(QFrame):
         pcol.setContentsMargins(0, 0, 0, 0)
         pcol.setAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight)
 
-        ref = self.listing.get("reference", {})
+        ref   = self.listing.get("reference", {})
         ref_p = ref.get("predicted_price") or ref.get("base_price")
         if ref_p:
             rl = QLabel(f"ref ${ref_p / 100:,.2f}")
@@ -313,6 +336,25 @@ class ItemRow(QFrame):
             f"color:{fg};background:{bg};border-radius:3px;"
             f"padding:1px 6px;font-size:10px;font-weight:600;"
         )
+        return lbl
+
+    def _sticker_img(self, icon_url: str, name: str) -> QLabel:
+        lbl = QLabel()
+        lbl.setFixedSize(28, 28)
+        lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        lbl.setStyleSheet(f"background:{C_SURF};border-radius:4px;")
+        if name:
+            lbl.setToolTip(name)
+        if icon_url:
+            w = ImgWorker(icon_url)
+            w.signals.loaded.connect(
+                lambda _u, px, l=lbl: l.setPixmap(
+                    px.scaled(26, 26,
+                              Qt.AspectRatioMode.KeepAspectRatio,
+                              Qt.TransformationMode.SmoothTransformation)
+                )
+            )
+            QThreadPool.globalInstance().start(w)
         return lbl
 
     # ── image ─────────────────────────────────────────────────────────────────
@@ -479,11 +521,9 @@ class MainWindow(QMainWindow):
         )
         self.scroll.setStyleSheet(
             f"QScrollArea{{background:{C_BG};border:none;}}"
-            f"QScrollArea>QWidget>QWidget{{background:{C_BG};}}"
         )
 
         self._list_w = QWidget()
-        self._list_w.setStyleSheet(f"background:{C_BG};")
         self._list_lay = QVBoxLayout(self._list_w)
         self._list_lay.setContentsMargins(12, 10, 12, 10)
         self._list_lay.setSpacing(4)
