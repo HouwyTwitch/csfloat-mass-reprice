@@ -440,7 +440,7 @@ class MainWindow(QMainWindow):
 
         # Load button
         self.load_btn = QPushButton("  Load Stall")
-        self.load_btn.setFixedSize(130, 34)
+        self.load_btn.setFixedHeight(34)
         self.load_btn.clicked.connect(self._load)
         lay.addWidget(self.load_btn)
 
@@ -519,7 +519,7 @@ class MainWindow(QMainWindow):
             sign = "+" if val > 0 else ""
             b = QPushButton(f"{sign}{val}%")
             b.setObjectName("btnSecondary")
-            b.setFixedSize(52, 32)
+            b.setFixedHeight(32)
             b.clicked.connect(lambda _, v=val: self.pct_spin.setValue(v))
             lay.addWidget(b)
 
@@ -539,7 +539,7 @@ class MainWindow(QMainWindow):
 
         self.apply_btn = QPushButton("Apply Reprice")
         self.apply_btn.setObjectName("btnSuccess")
-        self.apply_btn.setFixedSize(150, 40)
+        self.apply_btn.setFixedHeight(40)
         self.apply_btn.setEnabled(False)
         self.apply_btn.clicked.connect(self._apply)
         lay.addWidget(self.apply_btn)
@@ -751,7 +751,7 @@ QPushButton {{
     color: #ffffff;
     border: none;
     border-radius: 6px;
-    padding: 0 16px;
+    padding: 0 20px;
     font-weight: 600;
     font-size: 13px;
 }}
