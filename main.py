@@ -3,6 +3,8 @@
 
 import sys
 import json
+import time
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Optional
 
@@ -10,7 +12,7 @@ import requests
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QPushButton, QLineEdit, QScrollArea, QFrame, QCheckBox,
-    QDoubleSpinBox, QProgressBar, QMessageBox, QStatusBar, QSizePolicy,
+    QDoubleSpinBox, QSpinBox, QProgressBar, QMessageBox, QStatusBar, QSizePolicy,
 )
 from PyQt6.QtCore import (
     Qt, QThread, pyqtSignal, QRunnable, QThreadPool, QObject, pyqtSlot,
@@ -128,18 +130,40 @@ class ImgWorker(QRunnable):
 
 
 class RepriceWorker(QThread):
-    progress = pyqtSignal(int, int)
+    # done, total, current_item_name
+    progress = pyqtSignal(int, int, str)
     done     = pyqtSignal(int, list)
 
-    def __init__(self, api_key: str, changes: list[tuple[str, int]]) -> None:
+    def __init__(
+        self,
+        api_key: str,
+        changes: list[tuple[str, int, str]],  # (listing_id, price_cents, name)
+        delay_s: float = 5.0,
+    ) -> None:
         super().__init__()
         self.api_key = api_key
         self.changes = changes
+        self.delay_s = delay_s
 
     def run(self) -> None:
-        hdrs = {"Authorization": self.api_key, "Content-Type": "application/json"}
+        hdrs = {
+            "Authorization":    self.api_key,
+            "Content-Type":     "application/json",
+            "Accept":           "application/json, text/plain, */*",
+            "User-Agent":       (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/147.0.0.0 Safari/537.36"
+            ),
+            "Referer":          "https://csfloat.com/stall/me?sort_by=lowest_price",
+            "sec-ch-ua":        '"Google Chrome";v="147", "Not.A/Brand";v="8", "Chromium";v="147"',
+            "sec-ch-ua-mobile": "?0",
+            "sec-ch-ua-platform": '"Windows"',
+        }
         ok, errs = 0, []
-        for i, (lid, price) in enumerate(self.changes):
+        total = len(self.changes)
+        for i, (lid, price, name) in enumerate(self.changes):
+            self.progress.emit(i, total, name)
             try:
                 r = requests.patch(
                     f"{BASE_URL}/listings/{lid}",
@@ -153,7 +177,9 @@ class RepriceWorker(QThread):
                     errs.append(f"[{lid}] HTTP {r.status_code}: {r.text[:120]}")
             except Exception as e:
                 errs.append(f"[{lid}] {e}")
-            self.progress.emit(i + 1, len(self.changes))
+            self.progress.emit(i + 1, total, name)
+            if i < total - 1:
+                time.sleep(self.delay_s)
         self.done.emit(ok, errs)
 
 
@@ -491,7 +517,7 @@ class MainWindow(QMainWindow):
     def _mk_subbar(self) -> QWidget:
         f = QFrame()
         f.setObjectName("sub")
-        f.setFixedHeight(38)
+        f.setFixedHeight(40)
         f.setStyleSheet(
             f"QFrame#sub{{background:{C_SURF};border-bottom:1px solid {C_BORDER};}}"
         )
@@ -502,12 +528,48 @@ class MainWindow(QMainWindow):
         self.info_lbl = QLabel("No items loaded.")
         self.info_lbl.setStyleSheet(f"color:{C_MUTED};font-size:12px;")
         lay.addWidget(self.info_lbl)
+
         lay.addStretch()
 
-        self.sel_all_btn = self._sec_btn("Select all", self._sel_all)
-        self.desel_btn   = self._sec_btn("Deselect all", self._desel_all)
-        self.inv_btn     = self._sec_btn("Invert", self._invert)
-        for b in (self.sel_all_btn, self.desel_btn, self.inv_btn):
+        # ── Older-than filter ─────────────────────────────────────────────────
+        sep = QFrame()
+        sep.setFrameShape(QFrame.Shape.VLine)
+        sep.setStyleSheet(f"color:{C_BORDER};")
+        lay.addWidget(sep)
+
+        lay.addWidget(self._muted_label("Select listed ≥"))
+
+        self.age_spin = QSpinBox()
+        self.age_spin.setRange(1, 3650)
+        self.age_spin.setValue(7)
+        self.age_spin.setSuffix(" days ago")
+        self.age_spin.setFixedHeight(26)
+        self.age_spin.setStyleSheet(
+            f"QSpinBox{{background:{C_CARD};color:{C_TEXT};"
+            f"border:1px solid {C_BORDER};border-radius:5px;padding:2px 6px;}}"
+            f"QSpinBox:focus{{border-color:{C_PRIMARY};}}"
+            f"QSpinBox::up-button,QSpinBox::down-button"
+            f"{{background:{C_BORDER};border:none;width:16px;}}"
+            f"QSpinBox::up-button:hover,QSpinBox::down-button:hover"
+            f"{{background:{C_PRIMARY};}}"
+        )
+        lay.addWidget(self.age_spin)
+
+        age_btn = self._sec_btn("Select", self._select_older)
+        age_btn.setFixedHeight(26)
+        lay.addWidget(age_btn)
+
+        sep2 = QFrame()
+        sep2.setFrameShape(QFrame.Shape.VLine)
+        sep2.setStyleSheet(f"color:{C_BORDER};")
+        lay.addWidget(sep2)
+
+        # ── Selection buttons ─────────────────────────────────────────────────
+        for b in (
+            self._sec_btn("Select all",   self._sel_all),
+            self._sec_btn("Deselect all", self._desel_all),
+            self._sec_btn("Invert",       self._invert),
+        ):
             b.setFixedHeight(26)
             lay.addWidget(b)
 
@@ -563,10 +625,41 @@ class MainWindow(QMainWindow):
             b.clicked.connect(lambda _, v=val: self.pct_spin.setValue(v))
             lay.addWidget(b)
 
+        # Delay between requests
+        sep = QFrame()
+        sep.setFrameShape(QFrame.Shape.VLine)
+        sep.setStyleSheet(f"color:{C_BORDER};")
+        lay.addWidget(sep)
+
+        lay.addWidget(self._muted_label("Delay:"))
+
+        self.delay_spin = QSpinBox()
+        self.delay_spin.setRange(1, 60)
+        self.delay_spin.setValue(5)
+        self.delay_spin.setSuffix(" s")
+        self.delay_spin.setFixedSize(72, 40)
+        self.delay_spin.setStyleSheet(
+            f"QSpinBox{{background:{C_CARD};color:{C_TEXT};"
+            f"border:1px solid {C_BORDER};border-radius:6px;padding:4px 8px;}}"
+            f"QSpinBox:focus{{border-color:{C_PRIMARY};}}"
+            f"QSpinBox::up-button,QSpinBox::down-button"
+            f"{{background:{C_BORDER};border:none;width:18px;}}"
+            f"QSpinBox::up-button:hover,QSpinBox::down-button:hover"
+            f"{{background:{C_PRIMARY};}}"
+        )
+        lay.addWidget(self.delay_spin)
+
         lay.addStretch()
 
+        # Progress (hidden until repricing)
+        self.prog_lbl = QLabel("")
+        self.prog_lbl.setStyleSheet(f"color:{C_MUTED};font-size:12px;min-width:60px;")
+        self.prog_lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self.prog_lbl.setVisible(False)
+        lay.addWidget(self.prog_lbl)
+
         self.prog = QProgressBar()
-        self.prog.setFixedSize(200, 8)
+        self.prog.setFixedSize(160, 8)
         self.prog.setVisible(False)
         lay.addWidget(self.prog)
 
@@ -683,21 +776,47 @@ class MainWindow(QMainWindow):
             r.set_selected(not r.is_selected())
         self._update_stats()
 
+    def _select_older(self) -> None:
+        days   = self.age_spin.value()
+        cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+        matched = 0
+        for r in self._rows:
+            created_str = r.listing.get("created_at", "")
+            try:
+                created = datetime.fromisoformat(created_str.replace("Z", "+00:00"))
+                sel = created < cutoff
+            except Exception:
+                sel = False
+            r.set_selected(sel)
+            if sel:
+                matched += 1
+        self._update_stats()
+        self.statusbar.showMessage(
+            f"Selected {matched} listing(s) created ≥ {days} days ago."
+        )
+
     def _apply(self) -> None:
-        pct = self.pct_spin.value()
-        changes = [
-            (r.listing_id, r.new_price)
+        pct   = self.pct_spin.value()
+        delay = self.delay_spin.value()
+        changes: list[tuple[str, int, str]] = [
+            (r.listing_id, r.new_price, r.item.get("market_hash_name", r.listing_id))
             for r in self._rows
             if r.is_selected() and r.new_price is not None
         ]
         if not changes:
             return
 
+        est_s  = (len(changes) - 1) * delay
+        est_m  = est_s // 60
+        est_s %= 60
+        est_str = f"{est_m}m {est_s}s" if est_m else f"{est_s}s"
+
         ans = QMessageBox.question(
             self,
             "Confirm reprice",
-            f"Apply {pct:+.2f}% to {len(changes)} item(s)?\n\n"
-            "This will update the prices on CSFloat.",
+            f"Apply {pct:+.2f}% to {len(changes)} item(s)?\n"
+            f"Delay between requests: {delay}s  (estimated time: {est_str})\n\n"
+            "Prices will be updated on CSFloat.",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
         )
         if ans != QMessageBox.StandardButton.Yes:
@@ -708,17 +827,30 @@ class MainWindow(QMainWindow):
         self.prog.setMaximum(len(changes))
         self.prog.setValue(0)
         self.prog.setVisible(True)
-        self.statusbar.showMessage(f"Repricing {len(changes)} item(s)…")
+        self.prog_lbl.setText(f"0 / {len(changes)}")
+        self.prog_lbl.setVisible(True)
+        self.statusbar.showMessage(f"Starting reprice of {len(changes)} item(s)…")
 
-        self._reprice_w = RepriceWorker(self.api_edit.text().strip(), changes)
-        self._reprice_w.progress.connect(lambda d, _t: self.prog.setValue(d))
+        self._reprice_w = RepriceWorker(
+            self.api_edit.text().strip(), changes, delay_s=float(delay)
+        )
+        self._reprice_w.progress.connect(self._on_reprice_progress)
         self._reprice_w.done.connect(self._on_reprice_done)
         self._reprice_w.start()
+
+    def _on_reprice_progress(self, done: int, total: int, name: str) -> None:
+        self.prog.setValue(done)
+        self.prog_lbl.setText(f"{done} / {total}")
+        short = name if len(name) <= 40 else name[:38] + "…"
+        self.statusbar.showMessage(
+            f"[{done}/{total}]  Updating: {short}"
+        )
 
     def _on_reprice_done(self, ok: int, errs: list) -> None:
         self.load_btn.setEnabled(True)
         self.apply_btn.setEnabled(True)
         self.prog.setVisible(False)
+        self.prog_lbl.setVisible(False)
 
         if errs:
             detail = "\n".join(errs[:20])
@@ -734,9 +866,7 @@ class MainWindow(QMainWindow):
                 self, "Done", f"{ok} item(s) repriced successfully!"
             )
 
-        self.statusbar.showMessage(
-            f"Done — {ok} repriced, {len(errs)} failed."
-        )
+        self.statusbar.showMessage(f"Done — {ok} repriced, {len(errs)} failed.")
         if ok > 0:
             self._load()
 
